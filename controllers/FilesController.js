@@ -113,7 +113,7 @@ class FilesController {
         localPath: filePath,
       });
     } catch (error) {
-      console.error('Error uploading file:', err);
+      console.error('Error uploading file:', error);
       return res.status(500).json({ error: 'Internal Server Error' });
     }
   }
