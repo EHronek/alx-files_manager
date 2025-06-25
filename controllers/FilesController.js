@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import path from 'path';
+import mime from 'mime-types';
 import dbClient from '../utils/db';
 import redisClient from '../utils/redis';
 
@@ -114,6 +115,105 @@ class FilesController {
     } catch (error) {
       console.error('Error uploading file:', error);
       return res.status(500).json({ error: 'Internal Server Error' });
+    }
+  }
+
+  static async getShow(req, res) {
+    const token = req.headers['x-token'];
+    if (!token) {
+      return res.status(401).json(
+        { error: 'Unauthorized' },
+      );
+    }
+
+    const key = `auth_${token}`;
+    const userId = await redisClient.get(key);
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { id } = req.params;
+    if (!id) return res.status(404).json({ error: 'Not found' });
+
+    try {
+      const file = await dbClient.client.db()
+        .collection('files')
+        .findOne({
+          _id: dbClient.getObjectId(id),
+          userId: dbClient.getObjectId(userId),
+        });
+
+      if (!file) return res.status(404).json({ error: 'Not found' });
+
+      // format the response
+      const response = {
+        id: file._id,
+        userId: file.userId,
+        name: file.name,
+        type: file.type,
+        isPublic: file.isPublic,
+        parentId: file.parentId === '0' ? '0' : file.parentId,
+      };
+
+      // Add localPath if it exists (not folder)
+      if (file.localPath) {
+        response.localPath = file.localPath;
+      }
+      return res.status(200).json(response);
+    } catch (err) {
+      console.error('Error retrieving file:', err);
+      return res.status(404).json({ error: 'Not found' });
+    }
+  }
+
+  static async getIndex(req, res) {
+    const token = req.headers['x-token'];
+    if (!token) return res.status(401).json({ error: 'Unauthorized' });
+
+    const key = `auth_${token}`;
+    const userId = await redisClient.get(key);
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const parentId = req.query.parentId || '0';
+    const page = parseInt(req.query.page, 10) || 0;
+    const limit = 20;
+    const skip = page * limit;
+
+    try {
+      const files = await dbClient.client.db()
+        .collection('files')
+        .aggregate([
+          {
+            $match: {
+              userId: dbClient.getObjectId(userId),
+              parentId: parentId === '0' ? '0' : dbClient.getObjectId(parentId),
+            },
+          },
+          { $skip: skip },
+          { $limit: limit },
+          {
+            $project: {
+              _id: 0,
+              id: '$_id',
+              userId: 1,
+              name: 1,
+              type: 1,
+              isPublic: 1,
+              parentId: {
+                $cond: {
+                  if: { $eq: ['$parentId', '0'] },
+                  then: '0',
+                  else: '$parentId',
+                },
+              },
+              localPath: 1,
+            },
+          },
+        ])
+        .toArray();
+
+      return res.status(200).json(files);
+    } catch (err) {
+      console.error('Error listing files:', err);
+      return res.status(200).json([]);
     }
   }
 }
