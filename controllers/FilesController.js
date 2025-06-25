@@ -311,35 +311,59 @@ class FilesController {
 
   static async getFile(req, res) {
     const { id } = req.params;
-    const token = req.header('X-Token');
+    const { size } = req.query;
+    const token = req.headers['x-token'];
 
-    const file = await DBClient.db.collection('files').findOne({ _id: ObjectId(id) });
-    if (!file) return res.status(404).json({ error: 'Not found' });
+    // Get file document from DB
+    let file;
+    try {
+      file = await dbClient.client.db()
+        .collection('files')
+        .findOne({ _id: dbClient.getObjectId(id) });
+    } catch (err) {
+      return res.status(404).json({ error: 'Not found' });
+    }
 
-    // If private, check auth
-    if (!file.isPublic) {
-      if (!token) return res.status(404).json({ error: 'Not found' });
+    // Check if file exists
+    if (!file) {
+      return res.status(404).json({ error: 'Not found' });
+    }
 
-      const userId = await redisClient.get(`auth_${token}`);
-      if (!userId || userId !== file.userId.toString()) {
-        return res.status(404).json({ error: 'Not found' });
+    // Check file visibility
+    let isAuthorized = false;
+    if (token) {
+      const key = `auth_${token}`;
+      const userId = await redisClient.get(key);
+      if (userId && userId === file.userId.toString()) {
+        isAuthorized = true;
       }
     }
 
-    // If it's a folder
+    if (!file.isPublic && !isAuthorized) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+
+    // Check if file is a folder
     if (file.type === 'folder') {
       return res.status(400).json({ error: "A folder doesn't have content" });
     }
 
-    // Read the file
-    try {
-      const data = fs.readFileSync(file.localPath);
-      const mimeType = mime.lookup(file.name) || 'application/octet-stream';
-      res.setHeader('Content-Type', mimeType);
-      return res.status(200).send(data);
-    } catch (err) {
+    // Check if file exists locally
+    let filePath = file.localPath;
+    if (size && ['500', '250', '100'].includes(size) && file.type === 'image') {
+      filePath = `${file.localPath}_${size}`;
+    }
+
+    if (!fs.existsSync(filePath)) {
       return res.status(404).json({ error: 'Not found' });
     }
+
+    // Determine MIME type
+    const mimeType = mime.lookup(file.name) || 'text/plain';
+
+    // Set appropriate headers and send file
+    res.setHeader('Content-Type', mimeType);
+    return res.status(200).sendFile(filePath);
   }
 }
 
