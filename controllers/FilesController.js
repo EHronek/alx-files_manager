@@ -2,8 +2,11 @@ import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import path from 'path';
 import mime from 'mime-types';
+import { createQueue } from 'bull';
 import dbClient from '../utils/db';
 import redisClient from '../utils/redis';
+
+const fileQueue = createQueue('fileQueue');
 
 class FilesController {
   static async postUpload(req, res) {
@@ -103,6 +106,14 @@ class FilesController {
       const result = await dbClient.client.db()
         .collection('files')
         .insertOne(newFile);
+
+      if (type === 'image') {
+        // Add thumbnail generation job to queue
+        fileQueue.add({
+          fileId: result.insertedId,
+          userId: dbClient.getObjectId(userId),
+        });
+      }
 
       return res.status(201).json({
         id: result.insertedId,
